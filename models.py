@@ -1,10 +1,5 @@
-hour=7
-workdays = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday']
-
-
-
 class School:
-    def __init__(self,classes, faculties):
+    def __init__(self, classes, faculties):
         self.classes = classes
         self.faculties = faculties
     def get_classes(self):
@@ -17,62 +12,74 @@ class Faculty:
     def __init__(self, name, subjects):
         self.name = name
         self.subjects = subjects
-        self.classes=[]
-        self.isfree=[True for _ in range(hour)]
+        self.classes = []
+        self.isfree_score = {}  # Will store availability scores for each day and hour
+        self.timetable = {}     # Will store the faculty's schedule
+        
     def add_class(self, class_name):
         self.classes.append(class_name)
+        
     def get_classes(self):
         return self.classes
+        
     def get_name(self):
         return self.name
+        
     def get_subjects(self):
         return self.subjects
     
 class Class:
     def __init__(self, name, subjects):
-        self.workdays = workdays
         self.name = name
         self.subjects = subjects
-        self.Timetable = [Timetable_of_Day(day) for day in self.workdays]
-    def set_wordays(self,workdays):
-        self.workdays = workdays
+        self.timetable = {}
+        self.faculties = {}  # Map subjects to faculties
+
     def get_name(self):
         return self.name
-    def get_subject(self):
-        return self.subject
-    def get_faculty(self):
-        return self.faculty
+        
+    def get_subject(self, faculty):
+        # Find the subject taught by this faculty
+        for subject, assigned_faculty in self.faculties.items():
+            if assigned_faculty == faculty:
+                return subject
+        return None
+
 
 class Subject:
-    def __init__(self, name,credits):
+    def __init__(self, name, credits):
         self.name = name
         self.credits = credits
+    
     def get_name(self):
         return self.name
+        
+    def get_credits(self):
+        return self.credits
+
 class Hour:
-    def __init__(self,subject,faculty):
+    def __init__(self, subject, faculty):
         self.subject = subject
         self.faculty = faculty
+        
     def get_subject(self):
         return self.subject
-    def set_subject(self,subject):
+        
+    def set_subject(self, subject):
         self.subject = subject
+        
     def get_faculty(self):
         return self.faculty
-class Timetable_of_Day:
-    def __init__(self, day):
-        self.day = day
-        self.hours = [Hour(None,None) for _ in range(7)]
-    def get_day(self):
-        return self.day
-    def get_hours(self):
-        return self.hours
-    def set_hour(self, hour, subject, faculty):
-        self.hours[hour]=Hour(subject,faculty)
-        
-    def get_hour(self, hour):
-        return self.hours[hour]
+    
+    def __str__(self):
+        return f"{self.subject.get_name()} - {self.faculty.get_name()}"
+
 class Labs(Subject):
-    def __init__(self,name,credits,labslots=2):
-        super().__init__(name,credits)
-        self.numebr_of_lab_slots = labslots
+    def __init__(self, name, credits, labslots=2):
+        super().__init__(name, credits)
+        self.number_of_lab_slots = labslots
+        
+    def get_labslots(self):
+        return self.number_of_lab_slots
+
+
