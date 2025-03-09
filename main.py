@@ -16,11 +16,11 @@ from config import (
 )
 
 # Define subjects with credits determining weekly hours
-math = Subject("Mathematics", 5)     
-physics = Subject("Physics", 5)
-chemistry = Subject("Chemistry", 5)    
+math = Subject("Mathematics", 4)     
+physics = Subject("Physics", 4)
+chemistry = Subject("Chemistry", 4)    
 english = Subject("English", 4)
-biology = Subject("Biology", 5)       
+biology = Subject("Biology", 4)       
 computer = Subject("Computer", 3)
 history = Subject("History", 3)
 geography = Subject("Geography", 3)
@@ -238,7 +238,7 @@ def update_availability_score(faculty, hour, day):
         faculty.isfree_score[day][hour+1] -= 2
 
 def make_timetable(class_obj, school):
-    """Generate timetable for a class with backtracking"""
+    """Generate timetable with variable subject distribution across the week"""
     
     # Initialize empty timetable
     for day in WORKDAYS:
@@ -257,7 +257,42 @@ def make_timetable(class_obj, school):
         if isinstance(subject, Labs)
     }
     
-    def backtrack_timetable(day_idx=0, hour=0):
+    # Track subject distribution across days
+    subject_day_count = {}
+    
+    # Track subject positions (at which hour they appear) for each day
+    subject_positions = {}
+    
+    for subject in class_obj.subjects:
+        subject_name = subject.get_name()
+        subject_day_count[subject_name] = {day: 0 for day in WORKDAYS}
+        subject_positions[subject_name] = {hour: 0 for hour in range(HOURS_PER_DAY)}
+    
+    def get_subject_distribution_score(subject, day, hour):
+        """Calculate score based on distribution (lower is better)"""
+        subject_name = subject.get_name()
+        score = 0
+        
+        # Factor 1: How many times this subject already appears on this day
+        day_count = subject_day_count[subject_name][day] 
+        score += day_count * 3  # Higher penalty for concentration on same day
+        
+        # Factor 2: How many times subject appears at this hour across all days
+        position_count = subject_positions[subject_name][hour]
+        score += position_count * 4  # Higher penalty for same time slot pattern
+        
+        # Add randomization factor to prevent predictable patterns
+        score += random.randint(0, 1)
+        
+        return score
+    
+    def backtrack_timetable(day_idx=0, hour=0, iterations=0):
+        # Check for excessive backtracking
+        iterations += 1
+        if iterations > BACKTRACK_SETTINGS['max_iterations']:
+            print(f"Reached maximum iterations ({BACKTRACK_SETTINGS['max_iterations']}) for class {class_obj.get_name()}")
+            return False
+            
         # Base case: completed timetable
         if day_idx >= len(WORKDAYS):
             return True
@@ -266,28 +301,27 @@ def make_timetable(class_obj, school):
         
         # Move to next day if all hours are filled for this day
         if hour >= HOURS_PER_DAY:
-            return backtrack_timetable(day_idx + 1, 0)
+            return backtrack_timetable(day_idx + 1, 0, iterations)
         
         # Skip slots that are already filled (breaks)
         if class_obj.timetable[day][hour] is not None:
-            return backtrack_timetable(day_idx, hour + 1)
+            return backtrack_timetable(day_idx, hour + 1, iterations)
         
         # Try to schedule a subject for this hour
         subjects_to_try = list(class_obj.faculties.keys())
-        random.shuffle(subjects_to_try)  # Try different orders
+        
+        # Sort subjects by distribution score (lower is better)
+        subjects_to_try.sort(key=lambda s: get_subject_distribution_score(s, day, hour))
         
         for subject in subjects_to_try:
             faculty = class_obj.faculties[subject]
             
-            # Check if faculty is available at this hour
             if check_availability_of_faculty(faculty, hour, day, school):
-                # Check if subject is a lab
                 if isinstance(subject, Labs):
                     # Skip if this specific lab has already been scheduled this week
                     if lab_subjects_scheduled[subject.get_name()] >= LAB_CONSTRAINTS['lab_frequency']:
                         continue
                     
-                    # Other lab constraints remain the same...
                     # Check if this day already has a lab scheduled
                     if day in days_with_labs:
                         continue  # Skip - no two labs on the same day
@@ -300,7 +334,7 @@ def make_timetable(class_obj, school):
                     # Check if any of the consecutive slots are already filled
                     slots_available = True
                     for h in range(hour, hour + slots_needed):
-                        if class_obj.timetable[day][h] is not None:
+                        if h >= HOURS_PER_DAY or class_obj.timetable[day][h] is not None:
                             slots_available = False
                             break
                     
@@ -325,31 +359,49 @@ def make_timetable(class_obj, school):
                     # Mark this day as having a lab and count this lab subject
                     days_with_labs.add(day)
                     lab_subjects_scheduled[subject.get_name()] += 1
+                    
+                    # Update distribution tracking for all lab slots
+                    for h in range(hour, hour + slots_needed):
+                        subject_day_count[subject.get_name()][day] += 1
+                        subject_positions[subject.get_name()][h] += 1
                         
                     # Move past the lab slots
-                    if backtrack_timetable(day_idx, hour + slots_needed):
+                    if backtrack_timetable(day_idx, hour + slots_needed, iterations):
                         return True
                         
                     # If scheduling failed, backtrack
                     for h in range(hour, hour + slots_needed):
                         class_obj.timetable[day][h] = None
+                        subject_day_count[subject.get_name()][day] -= 1
+                        subject_positions[subject.get_name()][h] -= 1
+                    
                     days_with_labs.remove(day)
-                    lab_subjects_scheduled[subject.get_name()] -= 1  # Revert the lab count
+                    lab_subjects_scheduled[subject.get_name()] -= 1
                 else:
                     # Regular subject (single slot)
                     class_obj.timetable[day][hour] = Hour(subject, faculty)
                     update_availability_score(faculty, hour, day)
                     
+                    # Update distribution tracking
+                    subject_day_count[subject.get_name()][day] += 1
+                    subject_positions[subject.get_name()][hour] += 1
+                    
                     # Move to the next hour
-                    if backtrack_timetable(day_idx, hour + 1):
+                    if backtrack_timetable(day_idx, hour + 1, iterations):
                         return True
                     
                     # If scheduling next hours failed, backtrack
                     class_obj.timetable[day][hour] = None
+                    subject_day_count[subject.get_name()][day] -= 1
+                    subject_positions[subject.get_name()][hour] -= 1
                         
         # Couldn't find a valid subject-faculty, leave hour empty and try next hour
-        class_obj.timetable[day][hour] = None  # Ensure the slot is empty
-        return backtrack_timetable(day_idx, hour + 1)
+        class_obj.timetable[day][hour] = None
+        return backtrack_timetable(day_idx, hour + 1, iterations)
+    
+    # Add randomization to initial assignment order for diversity
+    if BACKTRACK_SETTINGS['randomize_order']:
+        random.shuffle(WORKDAYS)
     
     return backtrack_timetable()
 
@@ -475,6 +527,33 @@ def export_timetables(school):
 # Also update the GUI to use abbreviations for consistency
 def create_gui(school):
     """Create a simple GUI to display timetables with abbreviations"""
+    
+    # Recreate function to regenerate timetable
+    def recreate_timetable():
+        # Hide current window
+        root.withdraw()
+        
+        print("\nRecreating timetable...")
+        
+        # Reset school data
+        for class_obj in school.get_classes():
+            class_obj.timetable = {}
+        
+        # Reinitialize availability scores and generate new timetable
+        success = schedule_backtrack(school)
+        
+        if success:
+            print("Successfully recreated timetables!")
+            # Run analysis on new timetable
+            free_periods, shortfalls, faculty_needs = analyze_free_periods(school)
+            
+            # Close current window and create new one
+            root.destroy()
+            create_gui(school)
+        else:
+            print("Failed to recreate timetables. Try adjusting constraints.")
+            # Show window again if recreation failed
+            root.deiconify()
     
     # Create abbreviations for subjects
     subject_abbreviations = {
@@ -606,9 +685,19 @@ def create_gui(school):
                     col = 0
                     row += 1
                     
-    # Create Export Button
-    ttk.Button(root, text="Export Timetables", 
-               command=lambda: export_timetables(school)).pack(pady=10)
+    # Create button frame with Export and Recreate buttons
+    button_frame = ttk.Frame(root)
+    button_frame.pack(pady=10)
+    
+    # Export button
+    export_btn = ttk.Button(button_frame, text="Export Timetables", 
+               command=lambda: export_timetables(school))
+    export_btn.pack(side="left", padx=10)
+    
+    # Recreate button - NEW
+    recreate_btn = ttk.Button(button_frame, text="Recreate Timetable", 
+                           command=recreate_timetable)
+    recreate_btn.pack(side="left", padx=10)
     
     root.mainloop()
 
