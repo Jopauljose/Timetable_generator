@@ -1,18 +1,18 @@
 # Timetable Generator Configuration
 
 # Time settings
-HOURS_PER_DAY = 7
+HOURS_PER_DAY = 9
 DAYS_PER_WEEK = 5
 WORKDAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday']
 
 # Faculty constraints
-MAX_HOURS_PER_DAY = 3  # Maximum teaching hours per day for a faculty
+MAX_HOURS_PER_DAY = 5  # Maximum teaching hours per day for a faculty
 MIN_FRESHNESS_SCORE = 2  # Minimum faculty freshness score to teach
 
 # Break slots (period number, duration)
 BREAK_SLOTS = {
-    'morning_break': (3, 1),  # 4th period, 1 hour duration
-    'lunch_break': (5, 1)     # 6th period, 1 hour duration
+    'morning_break': (3,3),  # 4th period, 1 hour duration
+    'lunch_break': (5,5)     # 6th period, 1 hour duration
 }
 
 # Lab constraints
@@ -35,6 +35,6 @@ GUI_SETTINGS = {
 
 # Backtracking settings
 BACKTRACK_SETTINGS = {
-    'max_iterations': 1000,   # Maximum number of iterations before giving up
+    'max_iterations': 10000000, # Maximum number of iterations before giving up
     'randomize_order': True   # Randomize subject/faculty order during assignment
 }

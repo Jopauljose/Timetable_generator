@@ -3,27 +3,27 @@ import random
 import tkinter as tk
 from tkinter import ttk
 import copy
+from config import (
+    HOURS_PER_DAY,
+    DAYS_PER_WEEK,
+    WORKDAYS,
+    MAX_HOURS_PER_DAY,
+    MIN_FRESHNESS_SCORE,
+    BREAK_SLOTS,
+    LAB_CONSTRAINTS,
+    GUI_SETTINGS,
+    BACKTRACK_SETTINGS
+)
 
-# Define breaks and constraints
-BREAK_SLOTS = {
-    'morning_break': (3, 3),  # 4th period
-    'lunch_break': (5, 5)     # 6th period
-}
-
-LAB_CONSTRAINTS = {
-    'max_labs_per_day': 1,    # Maximum labs per day per class
-    'lab_frequency': 1        # Each lab subject occurs once per week
-}
-
-# Regular subjects with credits determining weekly hours
-math = Subject("Mathematics", 6)      # 6 credits = 6 hours per week
-physics = Subject("Physics", 5)       # 5 credits = 5 hours per week
+# Define subjects with credits determining weekly hours
+math = Subject("Mathematics", 5)     
+physics = Subject("Physics", 5)
 chemistry = Subject("Chemistry", 5)    
-english = Subject("English", 4)       # Reduced to 4 credits
+english = Subject("English", 4)
 biology = Subject("Biology", 5)       
-computer = Subject("Computer", 3)     # Reduced to 3 credits
-history = Subject("History", 3)       # Reduced to 3 credits
-geography = Subject("Geography", 3)   # Reduced to 3 credits
+computer = Subject("Computer", 3)
+history = Subject("History", 3)
+geography = Subject("Geography", 3)
 
 # Lab subjects with specific credit hours
 physics_lab = Labs("Physics Lab", 2, 2)    # 2 credits = 2 consecutive hours once per week
@@ -43,10 +43,12 @@ subjects = core_subjects + non_core_subjects + lab_subjects
 faculties = [
     Faculty("Dr. Math1", [math]),
     Faculty("Dr. Math2", [math]),
+    Faculty("Dr. Math3", [math]),
     Faculty("Dr. Phys1", [physics, physics_lab]),
     Faculty("Dr. Phys2", [physics, physics_lab]),
     Faculty("Dr. Chem1", [chemistry, chemistry_lab]),
-    Faculty("Dr. Chem2", [chemistry, chemistry_lab]),  # Added another chemistry teacher
+    Faculty("Dr. Chem2", [chemistry, chemistry_lab]),
+    Faculty("Dr. Chem3", [chemistry, chemistry_lab]),   
     Faculty("Dr. Bio1", [biology, biology_lab]),
     Faculty("Dr. Bio2", [biology, biology_lab]),
     Faculty("Dr. Comp", [computer, computer_lab]),
@@ -88,12 +90,6 @@ classes = [
     ])
 ]
 
-# Constants
-MAX_HOURS_PER_DAY = 3  # Maximum teaching hours per day for a faculty
-HOURS_PER_DAY = 9
-DAYS_PER_WEEK = 5
-WORKDAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday']
-
 def init_availability_scores(school):
     """Initialize availability scores for all faculties"""
     for faculty in school.get_faculties():
@@ -101,7 +97,7 @@ def init_availability_scores(school):
         for day in WORKDAYS:
             faculty.isfree_score[day] = [10] * HOURS_PER_DAY  # 10 is max freshness
 
-def choose_faculty(subject, class_obj, assigned_faculties):
+def choose_faculty(subject,assigned_faculties):
     """
     Choose a faculty member who can teach the subject
     and hasn't been assigned to this class yet
@@ -255,6 +251,12 @@ def make_timetable(class_obj, school):
     # Track which days have labs scheduled
     days_with_labs = set()
     
+    # Track how many times each lab subject has been scheduled
+    lab_subjects_scheduled = {
+        subject.get_name(): 0 for subject in class_obj.subjects 
+        if isinstance(subject, Labs)
+    }
+    
     def backtrack_timetable(day_idx=0, hour=0):
         # Base case: completed timetable
         if day_idx >= len(WORKDAYS):
@@ -281,14 +283,17 @@ def make_timetable(class_obj, school):
             if check_availability_of_faculty(faculty, hour, day, school):
                 # Check if subject is a lab
                 if isinstance(subject, Labs):
-                    # For labs, check if we have enough consecutive slots
-                    slots_needed = subject.get_labslots()
+                    # Skip if this specific lab has already been scheduled this week
+                    if lab_subjects_scheduled[subject.get_name()] >= LAB_CONSTRAINTS['lab_frequency']:
+                        continue
                     
+                    # Other lab constraints remain the same...
                     # Check if this day already has a lab scheduled
                     if day in days_with_labs:
                         continue  # Skip - no two labs on the same day
                     
                     # Check if we have enough consecutive slots
+                    slots_needed = subject.get_labslots()
                     if hour + slots_needed > HOURS_PER_DAY:
                         continue  # Not enough hours left in the day
                     
@@ -317,8 +322,9 @@ def make_timetable(class_obj, school):
                         class_obj.timetable[day][h] = Hour(subject, faculty)
                         update_availability_score(faculty, h, day)
                     
-                    # Mark this day as having a lab
+                    # Mark this day as having a lab and count this lab subject
                     days_with_labs.add(day)
+                    lab_subjects_scheduled[subject.get_name()] += 1
                         
                     # Move past the lab slots
                     if backtrack_timetable(day_idx, hour + slots_needed):
@@ -328,6 +334,7 @@ def make_timetable(class_obj, school):
                     for h in range(hour, hour + slots_needed):
                         class_obj.timetable[day][h] = None
                     days_with_labs.remove(day)
+                    lab_subjects_scheduled[subject.get_name()] -= 1  # Revert the lab count
                 else:
                     # Regular subject (single slot)
                     class_obj.timetable[day][hour] = Hour(subject, faculty)
@@ -605,6 +612,107 @@ def create_gui(school):
     
     root.mainloop()
 
+def analyze_free_periods(school):
+    """Analyze free periods in the timetable and calculate faculty needs"""
+    
+    print("\n=== FREE PERIODS ANALYSIS ===\n")
+    
+    # Track overall stats
+    total_free_periods = 0
+    subject_shortfalls = {}  # Subject to hours needed
+    
+    # For each class
+    for class_obj in school.classes:
+        print(f"\nClass: {class_obj.get_name()}")
+        free_periods = 0
+        free_periods_by_day = {day: 0 for day in WORKDAYS}
+        
+        # Count free periods
+        for day in WORKDAYS:
+            for hour in range(HOURS_PER_DAY):
+                # Skip break slots
+                if day in class_obj.timetable and hour < len(class_obj.timetable[day]):
+                    if class_obj.timetable[day][hour] is None:
+                        free_periods += 1
+                        free_periods_by_day[day] += 1
+        
+        print(f"  Total free periods: {free_periods}")
+        print("  Free periods by day:")
+        for day, count in free_periods_by_day.items():
+            print(f"    {day}: {count}")
+        
+        total_free_periods += free_periods
+        
+        # Check subject allocation vs credit requirements
+        print("  Subject allocation analysis:")
+        
+        # Count actual hours per subject
+        actual_hours = {}
+        for day in WORKDAYS:
+            if day not in class_obj.timetable:
+                continue
+                
+            for hour_slot in class_obj.timetable[day]:
+                if hour_slot and hour_slot != "BREAK":
+                    subject = hour_slot.get_subject()
+                    actual_hours[subject.get_name()] = actual_hours.get(subject.get_name(), 0) + 1
+        
+        # Compare with required hours (credits)
+        for subject in class_obj.subjects:
+            required_hours = subject.get_credits()
+            actual = actual_hours.get(subject.get_name(), 0)
+            
+            if required_hours > actual:
+                shortfall = required_hours - actual
+                print(f"    {subject.get_name()}: {actual}/{required_hours} hours (shortfall: {shortfall})")
+                
+                # Add to overall shortfall
+                if subject.get_name() not in subject_shortfalls:
+                    subject_shortfalls[subject.get_name()] = shortfall
+                else:
+                    subject_shortfalls[subject.get_name()] += shortfall
+    
+    # Calculate additional faculty needs
+    print("\nOverall Statistics:")
+    print(f"Total free periods across all classes: {total_free_periods}")
+    print("Total subject hour shortfalls:")
+    for subject, hours in subject_shortfalls.items():
+        print(f"  {subject}: {hours} hours")
+    
+    # Calculate minimum faculty needs based on subject qualifications
+    faculty_needs = {}
+    for subject_name, hours_needed in subject_shortfalls.items():
+        # Find how many faculties can teach this subject
+        qualified_faculty = sum(1 for f in school.faculties if 
+                               any(s.get_name() == subject_name for s in f.get_subjects()))
+
+        # Consider existing qualified faculty when calculating additional needs
+        # Check if existing faculty still have capacity for teaching more classes
+        existing_capacity = qualified_faculty * MAX_HOURS_PER_DAY
+
+        # Calculate minimum additional faculty needed, considering existing capacity
+        if existing_capacity >= hours_needed:
+            additional_faculty = 0  # Existing faculty can cover the needs
+        else:
+            remaining_need = hours_needed - existing_capacity
+            additional_faculty = (remaining_need // MAX_HOURS_PER_DAY) + \
+                                (1 if remaining_need % MAX_HOURS_PER_DAY > 0 else 0)
+        
+        # Store the result in the faculty_needs dictionary
+        faculty_needs[subject_name] = additional_faculty
+
+        # Add information about existing qualified faculty to output
+        print(f"  {subject_name}: {hours_needed} hours needed, {qualified_faculty} qualified faculty available")
+        if qualified_faculty > 0:
+            print(f"    Existing capacity: {existing_capacity} hours")
+    
+    print("\nAdditional faculty needed to cover shortfalls:")
+    for subject, count in faculty_needs.items():
+        if count > 0:
+            print(f"  {subject}: {count} additional faculty members")
+    
+    return total_free_periods, subject_shortfalls, faculty_needs
+
 if __name__ == "__main__":
     print("Starting timetable generation...")
     school = School(classes, faculties)
@@ -613,6 +721,8 @@ if __name__ == "__main__":
     
     if success:
         print("Successfully created timetables for all classes!")
+        # Run the free period analysis before showing GUI
+        free_periods, shortfalls, faculty_needs = analyze_free_periods(school)
         create_gui(school)
     else:
         print("Failed to create complete timetables. Try adjusting constraints.")
