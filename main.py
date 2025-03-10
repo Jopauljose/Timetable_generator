@@ -2,18 +2,133 @@ from models import Class, Faculty, School, Subject, Labs, Hour
 import random
 import tkinter as tk
 from tkinter import ttk
-import copy
 from config import (
     HOURS_PER_DAY,
-    DAYS_PER_WEEK,
+ TIME_SLOTS,
+    
     WORKDAYS,
     MAX_HOURS_PER_DAY,
-    MIN_FRESHNESS_SCORE,
     BREAK_SLOTS,
     LAB_CONSTRAINTS,
-    GUI_SETTINGS,
     BACKTRACK_SETTINGS
 )
+from datetime import datetime, timedelta
+
+def calculate_time_slots():
+    """
+    Calculate time slots based on school day start/end times and breaks.
+    This function automatically distributes the available time evenly among periods.
+    """
+    from config import SCHOOL_DAY_START, SCHOOL_DAY_END, BREAKS, HOURS_PER_DAY
+    
+    # Parse start and end times
+    start_time = datetime.strptime(SCHOOL_DAY_START, "%H:%M")
+    end_time = datetime.strptime(SCHOOL_DAY_END, "%H:%M")
+    
+    # Calculate total minutes in school day
+    total_minutes = (end_time - start_time).total_seconds() / 60
+    
+    # Calculate total break minutes
+    total_break_minutes = sum(b["duration_minutes"] for b in BREAKS)
+    
+    # Calculate how many actual teaching periods we have (total periods - breaks)
+    teaching_periods = HOURS_PER_DAY - len(BREAKS)
+    
+    # Calculate minutes per teaching period
+    minutes_per_period = (total_minutes - total_break_minutes) / teaching_periods
+    
+    # Round to nearest 5 minutes for cleaner schedules
+    minutes_per_period = int(5 * round(minutes_per_period / 5))
+    
+    print(f"School day: {SCHOOL_DAY_START}-{SCHOOL_DAY_END}, total {total_minutes} minutes")
+    print(f"Teaching periods: {teaching_periods}, each {minutes_per_period} minutes")
+    print(f"Breaks: {len(BREAKS)}, total {total_break_minutes} minutes")
+    
+    # Generate time slots
+    time_slots = {}
+    break_slots = {}
+    
+    # Start exactly at the school day start time
+    current_time = start_time
+    period = 1
+    
+    # Calculate optimal break positions based on total available teaching time
+    # This ensures breaks are distributed evenly throughout the day
+    available_teaching_minutes = total_minutes - total_break_minutes
+    ideal_break_minutes = []
+    
+    for i in range(len(BREAKS)):
+        # Position breaks evenly by minutes (not by periods)
+        # For example, if we have 355 teaching minutes and 3 breaks,
+        # we'd want breaks around the 89th, 178th, and 266th minute
+        position_minutes = (available_teaching_minutes / (len(BREAKS) + 1)) * (i + 1)
+        ideal_break_minutes.append(position_minutes)
+    
+    print(f"Ideal break positions (minutes into teaching time): {[int(m) for m in ideal_break_minutes]}")
+    
+    # Track teaching minutes elapsed so far
+    elapsed_teaching_minutes = 0
+    break_index = 0
+    
+    while period <= HOURS_PER_DAY:
+        # Check if we should insert a break now
+        if break_index < len(BREAKS) and elapsed_teaching_minutes >= ideal_break_minutes[break_index]:
+            # This is a break period
+            break_name = BREAKS[break_index]["name"]
+            break_duration = BREAKS[break_index]["duration_minutes"]
+            
+            # Create break time slot with actual break duration
+            break_end_time = current_time + timedelta(minutes=break_duration)
+            time_slot = f"{current_time.strftime('%H:%M')}-{break_end_time.strftime('%H:%M')} ({break_name})"
+            time_slots[period] = time_slot
+            
+            # Store the 1-indexed period number for BREAK_SLOTS
+            break_slot_name = break_name.lower().replace(" ", "_")
+            break_slots[break_slot_name] = (period, period)
+            
+            # Advance time by break duration
+            current_time = break_end_time
+            break_index += 1
+        else:
+            # Regular teaching period
+            period_end_time = current_time + timedelta(minutes=minutes_per_period)
+            time_slot = f"{current_time.strftime('%H:%M')}-{period_end_time.strftime('%H:%M')}"
+            time_slots[period] = time_slot
+            
+            # Advance time by period duration and track teaching minutes
+            current_time = period_end_time
+            elapsed_teaching_minutes += minutes_per_period
+        
+        period += 1
+    
+    # Ensure the last period ends exactly at the school day end time
+    # This may adjust the last period slightly if there's any rounding discrepancy
+    last_period = max(time_slots.keys())
+    last_time_str = time_slots[last_period]
+    
+    # Check if this is not a break period
+    if "(" not in last_time_str:
+        start_time_str = last_time_str.split("-")[0]
+        time_slots[last_period] = f"{start_time_str}-{end_time.strftime('%H:%M')}"
+        
+    # Print the calculated time slots for verification
+    print("\nCalculated time slots:")
+    for p, ts in sorted(time_slots.items()):
+        print(f"Period {p}: {ts}")
+    
+    print("\nCalculated break slots:")
+    for name, (period, _) in break_slots.items():
+        print(f"{name}: Period {period}")
+    
+    # Override globals with calculated values
+    global TIME_SLOTS, BREAK_SLOTS
+    TIME_SLOTS = time_slots
+    BREAK_SLOTS = break_slots
+    
+    return time_slots, break_slots
+
+# Call this function before scheduling to initialize TIME_SLOTS and BREAK_SLOTS
+TIME_SLOTS, BREAK_SLOTS = calculate_time_slots()
 
 # Define subjects with credits determining weekly hours
 math = Subject("Mathematics", 4)     
@@ -245,8 +360,9 @@ def make_timetable(class_obj, school):
         class_obj.timetable[day] = [None] * HOURS_PER_DAY
         
         # Set break slots - same for each day
-        class_obj.timetable[day][BREAK_SLOTS['morning_break'][0]] = "BREAK"
-        class_obj.timetable[day][BREAK_SLOTS['lunch_break'][0]] = "BREAK"
+        for break_name, (break_slot, _) in BREAK_SLOTS.items():
+            # Fix: Adjust from 1-indexed to 0-indexed for timetable array
+            class_obj.timetable[day][break_slot - 1] = "BREAK"
     
     # Track which days have labs scheduled
     days_with_labs = set()
@@ -429,7 +545,7 @@ def schedule_backtrack(school):
     return True
 
 def export_timetables(school):
-    """Export timetables to text files with subject abbreviations"""
+    """Export timetables to text files with subject abbreviations and time slots"""
     
     # Create abbreviations for subjects
     subject_abbreviations = {
@@ -461,11 +577,13 @@ def export_timetables(school):
             f.write(f"Timetable for {class_obj.get_name()}\n\n")
             
             # Header row with abbreviated day names
-            f.write("Hour\t" + "\t".join([day_abbreviations[day] for day in WORKDAYS]) + "\n")
+            f.write("Period\tTime\t" + "\t".join([day_abbreviations[day] for day in WORKDAYS]) + "\n")
             
             # Data rows
             for hour in range(HOURS_PER_DAY):
-                row = [f"Hour {hour+1}"]
+                # Get actual time slot from calculated values
+                time_slot = TIME_SLOTS.get(hour+1, f"Period {hour+1}")
+                row = [f"Period {hour+1}", time_slot]
                 
                 for day in WORKDAYS:
                     if day in class_obj.timetable and hour < len(class_obj.timetable[day]):
@@ -527,6 +645,7 @@ def export_timetables(school):
 # Also update the GUI to use abbreviations for consistency
 def create_gui(school):
     """Create a simple GUI to display timetables with abbreviations"""
+    # Import the TIME_SLOTS from config
     
     # Recreate function to regenerate timetable
     def recreate_timetable():
@@ -573,7 +692,7 @@ def create_gui(school):
     
     root = tk.Tk()
     root.title("Timetable Scheduler")
-    root.geometry("1000x700")  # Made taller to accommodate legend
+    root.geometry("1050x700")  # Made slightly wider for the time column
     
     # Create a notebook (tabbed interface)
     notebook = ttk.Notebook(root)
@@ -584,16 +703,42 @@ def create_gui(school):
         frame = ttk.Frame(notebook)
         notebook.add(frame, text=class_obj.get_name())
         
-        # Create timetable grid
-        for col, day in enumerate(WORKDAYS, start=1):
+        # Create timetable grid with time column
+        ttk.Label(frame, text="Period", font=("Arial", 10, "bold")).grid(
+            row=0, column=0, padx=5, pady=5)
+        ttk.Label(frame, text="Time", font=("Arial", 10, "bold")).grid(
+            row=0, column=1, padx=10, pady=5)
+            
+        for col, day in enumerate(WORKDAYS, start=2):
             ttk.Label(frame, text=day, font=("Arial", 10, "bold")).grid(
                 row=0, column=col, padx=5, pady=5)
         
+        # In the create_gui function, update the loop that creates time labels
         for row in range(HOURS_PER_DAY):
-            ttk.Label(frame, text=f"Hour {row+1}", font=("Arial", 10, "bold")).grid(
+            # Show period number
+            ttk.Label(frame, text=f"Period {row+1}", font=("Arial", 10)).grid(
                 row=row+1, column=0, padx=5, pady=5)
+                
+            # Show time slot - use the actual calculated time slots
+            time_text = TIME_SLOTS.get(row+1, f"Period {row+1}")
             
-            for col, day in enumerate(WORKDAYS, start=1):
+            # Create time label with special styling for breaks if this period is a break
+            is_break_period = False
+            for break_name, (break_period, _) in BREAK_SLOTS.items():
+                if break_period == row + 1:  # +1 because row is 0-indexed but BREAK_SLOTS uses 1-indexed periods
+                    is_break_period = True
+                    break
+            
+            if is_break_period:
+                time_label = tk.Label(frame, text=time_text, 
+                                     font=("Arial", 9), width=20,
+                                     bg="#FFD700")  # Gold for breaks
+            else:
+                time_label = ttk.Label(frame, text=time_text, font=("Arial", 9), width=20)
+            
+            time_label.grid(row=row+1, column=1, padx=2, pady=2)
+            
+            for col, day in enumerate(WORKDAYS, start=2):
                 if day in class_obj.timetable and row < len(class_obj.timetable[day]):
                     slot = class_obj.timetable[day][row]
                     
@@ -617,16 +762,17 @@ def create_gui(school):
                         text = "---"
                         bg_color = "#FFFFFF"  # White for free periods
                         
-                    cell = tk.Label(frame, text=text, width=10, height=2, 
+                    cell = tk.Label(frame, text=text, width=8, height=2, 
                                    relief="solid", borderwidth=1, bg=bg_color,
                                    justify="center")
                     cell.grid(row=row+1, column=col, padx=2, pady=2, sticky="nsew")
         
         # Add legend frame below the timetable
         legend_frame = ttk.LabelFrame(frame, text="Legend")
-        legend_frame.grid(row=HOURS_PER_DAY+2, column=0, columnspan=len(WORKDAYS)+1, 
+        legend_frame.grid(row=HOURS_PER_DAY+2, column=0, columnspan=len(WORKDAYS)+2, 
                           padx=10, pady=10, sticky="ew")
         
+        # Rest of the legend code remains the same
         # Add subject abbreviations to legend
         row = 0
         col = 0
@@ -667,7 +813,7 @@ def create_gui(school):
         
         # Add faculty assignments frame
         faculty_frame = ttk.LabelFrame(frame, text="Faculty Assignments")
-        faculty_frame.grid(row=HOURS_PER_DAY+3, column=0, columnspan=len(WORKDAYS)+1, 
+        faculty_frame.grid(row=HOURS_PER_DAY+3, column=0, columnspan=len(WORKDAYS)+2, 
                            padx=10, pady=10, sticky="ew")
         
         # Add faculty assignments to the frame
@@ -804,6 +950,12 @@ def analyze_free_periods(school):
 
 if __name__ == "__main__":
     print("Starting timetable generation...")
+    # Calculate time slots based on config
+    TIME_SLOTS, BREAK_SLOTS = calculate_time_slots()
+    print("School day schedule:")
+    for period, time in sorted(TIME_SLOTS.items()):
+        print(f"Period {period}: {time}")
+    
     school = School(classes, faculties)
     
     success = schedule_backtrack(school)
